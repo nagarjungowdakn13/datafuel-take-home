@@ -106,7 +106,7 @@ def test_city_osa_is_total_over_total_not_average_of_percentages(seed, conn):
     r = report.build_report(conn, "Mumbai", "2026-09-28")
     assert {s["sku_id"]: s["osa_pct"] for s in r["skus"]} == {"SKU-1": 100.0, "SKU-2": 0.0}
     assert r["osa_pct"] == 25.0            # 1/4; the mean of SKU percentages would be 50.0
-                                           # and the mean of store percentages 33.33
+                                           # and the mean of store percentages 16.67
 
 
 def test_rounding_is_half_up_to_two_decimals(seed, conn):
