@@ -9,33 +9,67 @@ Don't rewrite it from scratch. Reviewing is the skill being tested.
 """
 import sqlite3
 import time
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 import requests
 
 PORTAL = "http://127.0.0.1:8765"
 HEADERS = {"X-Api-Key": "dfhire-2026"}
+TIMEOUT_S = 5
+MAX_ATTEMPTS = 5
 
 
-def fetch_inventory(store_id, as_of, cursor="0", results=[]):
-    """Fetch every inventory page for a store, retrying until it works."""
-    while True:
+class IncompleteData(Exception):
+    """This store's data can't be trusted for this run, so it must not be saved."""
+
+
+def get_page(store_id, as_of, cursor):
+    """One inventory page with bounded retries (FIX 2: this used to retry forever,
+    0.1s apart, on every error, including 400/401 that can never succeed)."""
+    for attempt in range(MAX_ATTEMPTS):
+        time.sleep(0.5)  # stay well under the portal's burst and fair-use limits
         try:
             r = requests.get(
                 f"{PORTAL}/v1/stores/{store_id}/inventory",
                 params={"as_of": as_of, "cursor": cursor},
                 headers=HEADERS,
+                timeout=TIMEOUT_S,
             )
-            r.raise_for_status()
-            break
-        except Exception:
-            time.sleep(0.1)
+        except requests.RequestException:
+            time.sleep(2 ** attempt)
             continue
-    body = r.json()
-    results.extend(body["items"])
-    if body["next_cursor"]:
-        return fetch_inventory(store_id, as_of, body["next_cursor"], results)
-    return results
+        if r.status_code == 429:
+            time.sleep(float(r.headers.get("Retry-After", 2)))
+            continue
+        if 400 <= r.status_code < 500:
+            r.raise_for_status()  # our request is wrong; retrying can't fix it
+        if r.status_code >= 500:
+            time.sleep(2 ** attempt)
+            continue
+        return r.json()
+    raise IncompleteData(f"{store_id}: gave up after {MAX_ATTEMPTS} attempts")
+
+
+def fetch_inventory(store_id, as_of):
+    """Fetch every inventory page for a store.
+
+    FIX 1: items go into a fresh dict per call. The old shared default list made
+    MUM-002's rows include MUM-001's. A loop replaces the recursion that relied on it.
+    FIX 3: a 200 isn't trusted blindly. A degraded (edge) or partial page means the
+    store is incomplete, and repeated items across pages are kept once (by sku_id).
+    """
+    items = {}
+    cursor = "0"
+    while cursor is not None:
+        body = get_page(store_id, as_of, cursor)
+        if (body.get("meta") or {}).get("source") != "origin":
+            raise IncompleteData(f"{store_id}: degraded response (meta.source != 'origin')")
+        if body.get("partial"):
+            raise IncompleteData(f"{store_id}: portal returned partial snapshot")
+        for it in body["items"]:
+            items.setdefault(it["sku_id"], it)
+        cursor = body["next_cursor"]
+    return list(items.values())
 
 
 def save(conn, store_id, items):
@@ -68,6 +102,10 @@ if __name__ == "__main__":
     conn.execute("CREATE TABLE IF NOT EXISTS stores (store_id TEXT, city TEXT)")
     conn.execute("CREATE TABLE IF NOT EXISTS inventory (store_id TEXT, sku_id TEXT, name TEXT, "
                  "in_stock INT, qty INT, observed_at TEXT)")
+    as_of = datetime.now(timezone.utc).isoformat(timespec="seconds")  # FIX 2: was naive -> 400
     for sid in ["MUM-001", "MUM-002"]:
-        save(conn, sid, fetch_inventory(sid, datetime.utcnow().isoformat()))
+        try:
+            save(conn, sid, fetch_inventory(sid, as_of))
+        except IncompleteData as e:
+            print(f"not saved: {e}")
     print(city_osa(conn, "Mumbai"))
