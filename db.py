@@ -150,4 +150,7 @@ def parse_day(s: str) -> str:
     """
     if not _DAY_RE.fullmatch(s):
         raise ValueError(f"date must be YYYY-MM-DD, got {s!r}")
-    return date.fromisoformat(s).isoformat()  # also rejects 2026-02-30
+    try:
+        return date.fromisoformat(s).isoformat()
+    except ValueError:  # right shape, impossible day, e.g. 2026-02-30
+        raise ValueError(f"date is not a real calendar day: {s!r}") from None
