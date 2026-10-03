@@ -11,7 +11,6 @@
   Never start, stop or restart it.
 - Never send the portal more than about 2 requests per second, and never send requests in parallel.
 - Never run sweep.py yourself unless I ask; I run the sweeps in my own terminal.
-- Do not read or copy anything from D:\datafuel-take-home (an earlier attempt). Build here from scratch.
 - Code: small functions, docstrings that explain WHY, parameterised SQL only (no f-string SQL),
   type hints, no unnecessary dependencies.
 - Never write a number or result into a .md file unless you ran the command that produced it in this session.
